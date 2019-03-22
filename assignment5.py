@@ -2,7 +2,14 @@ import pymysql
 import json
 import csv
 import datetime
-conn = pymysql.connect(host='localhost', port=3306, user='Andrew', passwd='123Saymoo')
+import sys
+
+args = sys.argv
+arglen = len(args)
+if(arglen < 3):
+    print("Not enough arguments, exiting")
+    sys.exit()
+conn = pymysql.connect(host='localhost', port=3306, user=args[1], passwd=args[2])
 
 cur = conn.cursor()
 
@@ -39,59 +46,76 @@ def parseCSV(cs):
         for i in range(0,len(parsedjson)):
             l = len(d)
             d[parsedjson[i][key]] = parsedjson[i]
-            if len(d) != l: # New stuff
+            if len(d) != l: # Since the length actually changed upon insertion into the dictionary, must be a new item.
                 new.append(parsedjson[i])
         return new
+    def processLeJSON(d,key,index,row,table,joinTable,fkey):
+        temp = json.loads(row[index])
+        # Load the keywords from that cell into a dictionary and find the new ones to be inserted.
+        jsonItems = loadDict(d,temp,key)
+        insert = "INSERT INTO `"+table+"`("+"`"+key+"`"+", `name`) VALUES(%s,%s);"
+        insert_join = "INSERT INTO"+"`"+joinTable+"`"+"(`"+fkey+"`"+",`MID`) VALUES(%s, %s)"
+        for item in jsonItems:
+            cur.execute(insert,(item[key],item['name']))
+        for item in temp:
+            cur.execute(insert_join,(item[key],row[3]))
+
     with open(cs,'r') as f:
-        readcs = csv.reader(f)
+        readcs = csv.reader(f)  # Parse the csv file
+        # Initialize our dictionaries which will store all the unique keywords, companies, countries, genres, and languages.
         keywords = {}
         production_companies = {}
         production_countries = {}
         genres = {}
         spoken_languages = {}
+        # Just a flag so I can skip the first row.
         i = False
-        count = 0
         for row in readcs:
-            curr = row;
-            if(not i):
+
+            if(not i):  # Skip first row.
                 i = True
                 continue
+            # Deal with the random blank collumns in the database.
+            if(row[13] == ''):
+                row[13] = 0
+            if(row[11] == ''):
+                row[11] = datetime.date.today()
+            # Create the string that will be run in MYSQL for inserting each movie.
             mov_insert = "INSERT INTO `Movie` (`id`, `homepage`, `budget`, `original_language`, `original_title`, `overview`, `popularity`, `release_date`, `revenue`, `runtime`, `status`, `tagline`, `title`, `vote_average`, `vote_count`) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);"
-            if(curr[13] == ''):
-                curr[13] = 0
-            if(curr[11] == ''):
-                curr[11] = datetime.date.today()
-            cur.execute(mov_insert,(curr[3],curr[2],curr[0],curr[5],curr[6],curr[7],curr[8],curr[11],curr[12],curr[13],curr[15],curr[16],curr[17],curr[18],curr[19]))
-            temp_kw = json.loads(curr[4])
-            newKeywords = loadDict(keywords,temp_kw,"id")
-            key_insert = "INSERT INTO `keywords`(`id`, `name`) VALUES(%s,%s);"
-            for key in newKeywords:
-                cur.execute(key_insert,(key['id'],key['name']));
-            # Add to the join table after you add the new data to the keyword table.    
-            temp_comp = json.loads(curr[9])
-            newComp = loadDict(production_companies,temp_comp,"id")
-            prod_insert = "INSERT INTO `production_companies`(`id`, `name`) VALUES(%s,%s);"
-            for key in newComp:
-                cur.execute(prod_insert,(key['id'],key['name']));
-            temp_cou = json.loads(curr[10])
-            newCountries = loadDict(production_countries,temp_cou,"iso_3166_1")
-            cou_insert = "INSERT INTO `production_countries`(`iso_3166_1`, `name`) VALUES(%s,%s);"
-            for key in newCountries:
-                cur.execute(cou_insert,(key['iso_3166_1'],key['name']));
-            temp_gen = json.loads(curr[1])
-            newGenres = loadDict(genres,temp_gen,"id")
-            gen_insert = "INSERT INTO `genres`(`id`, `name`) VALUES(%s,%s);"
-            for key in newGenres:
-                cur.execute(gen_insert,(key['id'],key['name']));
-            temp_spok = json.loads(curr[14])
-            newSpoken = loadDict(spoken_languages,temp_spok,"iso_639_1")
-            spok_insert = "INSERT INTO `spoken_languages`(`iso_639_1`, `name`) VALUES(%s,%s);"
-            for key in newSpoken:
-                cur.execute(spok_insert,(key['iso_639_1'],key['name']));
+            # Execute that string and replace each %s with a value from the csv.
+            cur.execute(mov_insert,(row[3],row[2],row[0],row[5],row[6],row[7],row[8],row[11],row[12],row[13],row[15],row[16],row[17],row[18],row[19]))
+            # row[4] contains the keywords
+            #def processLeJSON(d,key,index,row,table,joinTable,fkey):
+            processLeJSON(keywords,"id",4,row,"keywords","keywordToMovie","KID")
+            processLeJSON(production_companies,"id",9,row,"production_companies","companyToMovie", "CMPID")
+            processLeJSON(production_countries,"iso_3166_1",10,row,"production_countries","countryToMovie","COUID")
+            processLeJSON(genres,"id",1,row,"genres","genreToMovie","GID")
+            processLeJSON(spoken_languages,"iso_639_1",14,row,"spoken_languages","spokenToMovie","SID")
         conn.commit()
 
-createTables()
-parseCSV("tmdb_5000_movies.csv")
+def queries(queryNumbers):
+    que = ["SELECT AVG(budget) FROM Movie;", "SELECT Movie.original_title, production_companies.name FROM (((Assignment5.Movie INNER JOIN countryToMovie ON countryToMovie.MID = Assignment5.Movie.id) INNER JOIN production_countries ON countryToMovie.COUID = production_countries.iso_3166_1) INNER JOIN companyToMovie ON companyToMovie.MID = Movie.id) INNER JOIN production_companies ON production_companies.id = companyToMovie.CMPID WHERE production_countries.iso_3166_1 = 'US';", "SELECT Movie.original_title, Movie.revenue FROM Movie ORDER BY Movie.revenue DESC LIMIT 5;", "SELECT Movie.original_title, genres.name FROM (Movie INNER JOIN genreToMovie ON Movie.id = genreToMovie.MID) INNER JOIN genres ON genres.id = genreToMovie.GID WHERE Movie.id IN (SELECT Movie.id From (Movie INNER JOIN genreToMovie ON Movie.id = genreToMovie.MID) INNER JOIN genres ON genres.id = genreToMovie.GID AND genres.name = 'Mystery') AND Movie.id IN (SELECT Movie.id From (Movie INNER JOIN genreToMovie ON Movie.id = genreToMovie.MID) INNER JOIN genres ON genres.id = genreToMovie.GID AND genres.name = 'Science Fiction');", "SELECT Movie.original_title, Movie.popularity FROM Movie WHERE Movie.popularity > (SELECT AVG(Movie.popularity) FROM Movie);"]
+    for i in queryNumbers:
+        count = 0
+        cur.execute(que[i])
+        print("###############!!!!!!!!!!#########QUERY "+str(i))
+        for line in cur.fetchall():
+            count += 1
+            print(line)
+            if(count > 4):
+                break
 
-conn.close()
-cur.close()
+
+createTables()
+try:
+    parseCSV("tmdb_5000_movies.csv")
+except:
+    print("Failed while trying to load in the data, will try queries anyway")
+finally:
+    if(arglen < 4):
+        queries(range(0,5))
+    else:
+        queries([int(args[3])])
+
+    conn.close()
+    cur.close()
